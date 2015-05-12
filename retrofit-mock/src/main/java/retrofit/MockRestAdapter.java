@@ -86,7 +86,6 @@ public final class MockRestAdapter {
 
   private final RestAdapter restAdapter;
   private final Executor executor;
-  private MockRxSupport mockRxSupport;
   final Random random = new Random();
 
   private ValueChangeListener listener = ValueChangeListener.EMPTY;
@@ -213,16 +212,14 @@ public final class MockRestAdapter {
   public <T> T create(Class<T> service, T mockService) {
     Utils.validateServiceClass(service);
     return (T) Proxy.newProxyInstance(service.getClassLoader(), new Class<?>[] { service },
-        new MockHandler(mockService, restAdapter.getMethodInfoCache(service)));
+        new MockHandler(service, mockService));
   }
 
   private class MockHandler implements InvocationHandler {
     private final Object mockService;
-    private final Map<Method, MethodInfo> methodInfoCache;
 
-    public MockHandler(Object mockService, Map<Method, MethodInfo> methodInfoCache) {
+    public MockHandler(Object mockService, T service) {
       this.mockService = mockService;
-      this.methodInfoCache = methodInfoCache;
     }
 
     @Override public Object invoke(Object proxy, Method method, final Object[] args)
@@ -247,17 +244,6 @@ public final class MockRestAdapter {
           }
           throw newError;
         }
-      }
-
-      if (methodInfo.executionType == MethodInfo.ExecutionType.RX) {
-        if (mockRxSupport == null) {
-          if (Platform.HAS_RX_JAVA) {
-            mockRxSupport = new MockRxSupport(restAdapter, executor);
-          } else {
-            throw new IllegalStateException("Observable method found but no RxJava on classpath");
-          }
-        }
-        return mockRxSupport.createMockObservable(this, methodInfo, args, request);
       }
 
       executor.execute(new Runnable() {
@@ -395,32 +381,5 @@ public final class MockRestAdapter {
 
   private static long uptimeMillis() {
     return System.nanoTime() / 1000000L;
-  }
-
-  /** Indirection to avoid VerifyError if RxJava isn't present. */
-  private static class MockRxSupport {
-    private final Scheduler httpScheduler;
-    private final ErrorHandler errorHandler;
-
-    MockRxSupport(RestAdapter restAdapter, Executor executor) {
-      httpScheduler = Schedulers.from(executor);
-      errorHandler = restAdapter.errorHandler;
-    }
-
-    Observable createMockObservable(final MockHandler mockHandler, final MethodInfo methodInfo,
-        final Object[] args, final Request request) {
-      return Observable.just("nothing") //
-          .flatMap(new Func1<String, Observable<?>>() {
-            @Override public Observable<?> call(String s) {
-              try {
-                return (Observable) mockHandler.invokeSync(methodInfo, args, request);
-              } catch (RetrofitError e) {
-                return Observable.error(errorHandler.handleError(e));
-              } catch (Throwable throwable) {
-                return Observable.error(throwable);
-              }
-            }
-          }).subscribeOn(httpScheduler);
-    }
   }
 }

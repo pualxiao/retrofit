@@ -18,10 +18,9 @@ package retrofit;
 import com.squareup.okhttp.Response;
 import java.lang.annotation.Annotation;
 import java.lang.reflect.Method;
-import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;
-import java.lang.reflect.WildcardType;
 import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.regex.Matcher;
@@ -33,6 +32,7 @@ import retrofit.http.FieldMap;
 import retrofit.http.FormUrlEncoded;
 import retrofit.http.GET;
 import retrofit.http.HEAD;
+import retrofit.http.HTTP;
 import retrofit.http.Header;
 import retrofit.http.Headers;
 import retrofit.http.Multipart;
@@ -44,18 +44,10 @@ import retrofit.http.PartMap;
 import retrofit.http.Path;
 import retrofit.http.Query;
 import retrofit.http.QueryMap;
-import retrofit.http.HTTP;
 import retrofit.http.Streaming;
-import rx.Observable;
 
 /** Request metadata about a service interface declaration. */
 final class MethodInfo {
-  enum ExecutionType {
-    ASYNC,
-    RX,
-    SYNC
-  }
-
   // Upper and lower characters, digits, underscores, and hyphens, starting with a character.
   private static final String PARAM = "[a-zA-Z][a-zA-Z0-9_-]*";
   private static final Pattern PARAM_NAME_REGEX = Pattern.compile(PARAM);
@@ -71,10 +63,13 @@ final class MethodInfo {
   }
 
   final Method method;
+  final List<ExecutionAdapter> adapters;
 
   // Method-level details
-  final ExecutionType executionType;
+  ExecutionAdapter adapter;
+  Execution.Classification classification;
   Type responseObjectType;
+
   Type requestObjectType;
   RequestType requestType = RequestType.SIMPLE;
   String requestMethod;
@@ -89,10 +84,10 @@ final class MethodInfo {
   // Parameter-level details
   Annotation[] requestParamAnnotations;
 
-  MethodInfo(Method method) {
+  MethodInfo(Method method, List<ExecutionAdapter> adapters) {
     this.method = method;
-    executionType = parseResponseType();
-
+    this.adapters = adapters;
+    parseResponseType();
     parseMethodAnnotations();
     parseParameters();
   }
@@ -223,69 +218,46 @@ final class MethodInfo {
     return builder.build();
   }
 
-  /** Loads {@link #responseObjectType}. */
-  private ExecutionType parseResponseType() {
+  /** Loads {@link #responseObjectType} and {@link #adapter}. */
+  private void parseResponseType() {
     // Synchronous methods have a non-void return type.
     // Observable methods have a return type of Observable.
     Type returnType = method.getGenericReturnType();
 
-    // Asynchronous methods should have a Callback type as the last argument.
-    Type lastArgType = null;
-    Class<?> lastArgClass = null;
-    Type[] parameterTypes = method.getGenericParameterTypes();
-    if (parameterTypes.length > 0) {
-      Type typeToCheck = parameterTypes[parameterTypes.length - 1];
-      lastArgType = typeToCheck;
-      if (typeToCheck instanceof ParameterizedType) {
-        typeToCheck = ((ParameterizedType) typeToCheck).getRawType();
-      }
-      if (typeToCheck instanceof Class) {
-        lastArgClass = (Class<?>) typeToCheck;
-      }
-    }
-
-    boolean hasReturnType = returnType != void.class;
-    boolean hasCallback = lastArgClass != null && Callback.class.isAssignableFrom(lastArgClass);
-
     // Check for invalid configurations.
-    if (hasReturnType && hasCallback) {
-      throw methodError("Must have return type or Callback as last argument, not both.");
-    }
-    if (!hasReturnType && !hasCallback) {
-      throw methodError("Must have either a return type or Callback as last argument.");
+    if (returnType == void.class) {
+      throw methodError("Service methods cannot return void.");
     }
 
-    if (hasReturnType) {
-      if (Platform.HAS_RX_JAVA) {
-        Class rawReturnType = Types.getRawType(returnType);
-        if (RxSupport.isObservable(rawReturnType)) {
-          returnType = RxSupport.getObservableType(returnType, rawReturnType);
-          responseObjectType = getParameterUpperBound((ParameterizedType) returnType);
-          return ExecutionType.RX;
+    for (int i = 0, count = adapters.size(); i < count; i++) {
+      ExecutionAdapter adapter = adapters.get(i);
+      Type responseType = adapter.parseType(returnType);
+      if (responseType != null) {
+        this.adapter = adapter;
+        this.responseObjectType = responseType;
+
+        Class<?> rawType = Types.getRawType(responseType);
+        if (rawType == retrofit.Response.class) {
+          classification = Execution.Classification.RESPONSE;
+        } else if (rawType == Result.class) {
+          classification = Execution.Classification.RESULT;
+        } else {
+          classification = Execution.Classification.USER;
         }
-      }
-      responseObjectType = returnType;
-      return ExecutionType.SYNC;
-    }
 
-    lastArgType = Types.getSupertype(lastArgType, Types.getRawType(lastArgType), Callback.class);
-    if (lastArgType instanceof ParameterizedType) {
-      responseObjectType = getParameterUpperBound((ParameterizedType) lastArgType);
-      return ExecutionType.ASYNC;
-    }
-
-    throw methodError("Last parameter must be of type Callback<X> or Callback<? super X>.");
-  }
-
-  private static Type getParameterUpperBound(ParameterizedType type) {
-    Type[] types = type.getActualTypeArguments();
-    for (int i = 0; i < types.length; i++) {
-      Type paramType = types[i];
-      if (paramType instanceof WildcardType) {
-        types[i] = ((WildcardType) paramType).getUpperBounds()[0];
+        return;
       }
     }
-    return types[0];
+
+    StringBuilder builder =
+        new StringBuilder("No registered adapters were able to handle return type ").append(
+            returnType).append(". Checked: [ ");
+    for (int i = 0, count = adapters.size(); i < count; i++) {
+      if (i > 0) builder.append(", ");
+      builder.append(adapters.get(i).getClass().getSimpleName());
+    }
+    builder.append(" ]");
+    throw methodError(builder.toString());
   }
 
   /**
@@ -296,10 +268,6 @@ final class MethodInfo {
 
     Annotation[][] methodParameterAnnotationArrays = method.getParameterAnnotations();
     int count = methodParameterAnnotationArrays.length;
-    if (executionType == ExecutionType.ASYNC) {
-      count -= 1; // Callback is last argument when not a synchronous method.
-    }
-
     Annotation[] requestParamAnnotations = new Annotation[count];
 
     boolean gotField = false;
@@ -422,16 +390,5 @@ final class MethodInfo {
       patterns.add(m.group(1));
     }
     return patterns;
-  }
-
-  /** Indirection to avoid log complaints if RxJava isn't present. */
-  private static final class RxSupport {
-    public static boolean isObservable(Class rawType) {
-      return rawType == Observable.class;
-    }
-
-    public static Type getObservableType(Type contextType, Class contextRawType) {
-      return Types.getSupertype(contextType, contextRawType, Observable.class);
-    }
   }
 }

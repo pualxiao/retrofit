@@ -37,10 +37,9 @@ final class Utils {
    * Replace a {@link Response} with an identical copy whose body is backed by a
    * {@link Buffer} rather than a {@link Source}.
    */
-  static Response readBodyToBytesIfNecessary(Response response) throws IOException {
-    final ResponseBody body = response.body();
+  static ResponseBody readBodyToBytesIfNecessary(final ResponseBody body) throws IOException {
     if (body == null) {
-      return response;
+      return null;
     }
 
     BufferedSource source = body.source();
@@ -48,8 +47,7 @@ final class Utils {
     buffer.writeAll(source);
     source.close();
 
-    return response.newBuilder()
-        .body(new ResponseBody() {
+    return new ResponseBody() {
           @Override public MediaType contentType() {
             return body.contentType();
           }
@@ -61,8 +59,7 @@ final class Utils {
           @Override public BufferedSource source() {
             return buffer.clone();
           }
-        })
-        .build();
+        };
   }
 
   static <T> void validateServiceClass(Class<T> service) {
@@ -75,6 +72,15 @@ final class Utils {
     if (service.getInterfaces().length > 0) {
       throw new IllegalArgumentException("Interface definitions must not extend other interfaces.");
     }
+  }
+
+  public static void sneakyRethrow(Throwable t) {
+    Utils.<Error>sneakyThrow2(t);
+  }
+
+  @SuppressWarnings("unchecked")
+  private static <T extends Throwable> void sneakyThrow2(Throwable t) throws T {
+    throw (T) t;
   }
 
   static class SynchronousExecutor implements Executor {

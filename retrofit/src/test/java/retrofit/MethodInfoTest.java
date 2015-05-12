@@ -212,9 +212,9 @@ public class MethodInfoTest {
     assertThat(methodInfo.responseObjectType).isEqualTo(expected);
   }
 
-  private static interface ResponseCallback extends Callback<Response> {
+  private interface ResponseCallback extends Callback<Response> {
   }
 
-  private static interface MultimapCallback<K, V> extends Callback<Map<? extends K, V[]>> {
+  private interface MultimapCallback<K, V> extends Callback<Map<? extends K, V[]>> {
   }
 }

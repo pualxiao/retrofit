@@ -44,7 +44,6 @@ final class RequestBuilder {
   private final Converter converter;
   private final Annotation[] paramAnnotations;
   private final String requestMethod;
-  private final boolean async;
   private final String apiUrl;
 
   private MultipartBuilder multipartBuilder;
@@ -62,7 +61,6 @@ final class RequestBuilder {
 
     paramAnnotations = methodInfo.requestParamAnnotations;
     requestMethod = methodInfo.requestMethod;
-    async = methodInfo.executionType == MethodInfo.ExecutionType.ASYNC;
 
     if (methodInfo.headers != null) {
       headers = methodInfo.headers.newBuilder();
@@ -200,11 +198,7 @@ final class RequestBuilder {
     if (args == null) {
       return;
     }
-    int count = args.length;
-    if (async) {
-      count -= 1;
-    }
-    for (int i = 0; i < count; i++) {
+    for (int i = 0; i < args.length; i++) {
       Object value = args[i];
 
       Annotation annotation = paramAnnotations[i];
