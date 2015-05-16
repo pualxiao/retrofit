@@ -8,7 +8,7 @@ import rx.Subscriber;
 import rx.functions.Action0;
 import rx.subscriptions.Subscriptions;
 
-public final class ObservableExecutionAdapter implements ExecutionAdapter {
+public final class ObservableExecutionAdapter implements CallAdapter {
   @Override public Type parseType(Type returnType) {
     if (Types.getRawType(returnType) != Observable.class) {
       return null;
@@ -20,15 +20,27 @@ public final class ObservableExecutionAdapter implements ExecutionAdapter {
         + " as Observable<Foo> or Observable<? extends Foo>");
   }
 
-  @Override public Object execute(final Execution execution) {
+  @Override public Object adapt(final Call<?> call) {
     return Observable.create(new Observable.OnSubscribe<Object>() {
       @Override public void call(final Subscriber<? super Object> subscriber) {
-        final com.squareup.okhttp.Call call = execution.execute(new ExecutionCallback() {
-          @Override public void result(Result result) {
+        call.enqueue(new Callback<Object>() {
+          @Override public void success(Response<Object> response) {
             if (subscriber.isUnsubscribed()) {
               return;
             }
 
+            // TODO
+          }
+
+          @Override public void failure(Throwable t) {
+            if (subscriber.isUnsubscribed()) {
+              return;
+            }
+
+            // TODO
+          }
+
+          @Override public void result(Result result) {
             switch (execution.classification()) {
               case RESULT:
                 subscriber.onNext(result);
@@ -57,9 +69,6 @@ public final class ObservableExecutionAdapter implements ExecutionAdapter {
                   }
                 }
                 break;
-
-              default:
-                throw new AssertionError("Unhanded type: " + execution.classification());
             }
           }
         });
