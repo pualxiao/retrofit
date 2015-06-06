@@ -226,8 +226,8 @@ final class MethodInfo {
           "Registered call adapter factory was unable to handle return type " + returnType);
     }
     Type responseType = adapter.responseType();
-    if (Utils.hasTypeVariable(responseType)) {
-      throw methodError("Method response type must not include a type variable.");
+    if (Utils.hasUnresolvableType(responseType)) {
+      throw methodError("Method response type must not include a type variable or wildcard.");
     }
     if (converter == null && responseType != ResponseBody.class) {
       throw methodError("Method response type is "
